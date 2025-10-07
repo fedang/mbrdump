@@ -1,45 +1,23 @@
 #include <stdio.h>
-#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
-#define BYTE "0x%02hhX"
-#define WORD "0x%02hhX"
-#define DWRD "0x%02hhX"
+#include "mbrdump.h"
 
-extern const char *system_ids[256];
-
-__attribute__((packed))
-struct partition {
-	uint8_t attributes;
-	uint8_t start_head;
-	uint16_t start_sector : 6,
-			 start_cylinder : 10;
-	uint8_t system_id;
-	uint8_t  end_head;
-	uint16_t end_sector : 6,
-			 end_cylinder : 10;
-	uint32_t start_lba;
-	uint32_t sectors;
-};
-
-struct {
-	uint8_t bootstrap[440];
-	uint32_t unique_id;
-	uint16_t reserved;
-	struct partition table[4];
-	uint8_t signature[2];
-}
-__attribute__((packed))
-MBR;
-
-#define MBR_SIZE 512
-
-void hexprint(uint8_t *bytes, int len)
+void dump_assembly(uint8_t *bytes, int len)
 {
-	for (int i = 0; i < len; i++) {
-		if (i) putchar(' ');
-		printf("0x%02hhx", bytes[i]);
+	FILE* tmp = fopen("/tmp/mbr_bootstrap.bin", "wb");
+    if (!tmp)
+		return;
+
+	if (fwrite(bytes, 1, len, tmp) != len) {
+		fclose(tmp);
+		return;
 	}
+
+	fclose(tmp);
+
+	system("objdump -D -Mintel,i8086,addr16,data16 -b binary -m i386 /tmp/mbr_bootstrap.bin");
 }
 
 void dump_partition(struct partition part)
@@ -47,7 +25,11 @@ void dump_partition(struct partition part)
 	printf("Attributes: %hhx %s\n", part.attributes,
 		   (part.attributes & 0x80) == 0x80 ? "(active)" : "");
 
-	printf("System ID: 0x%hhx %s\n", part.system_id, system_ids[part.system_id]);
+	printf("System ID: 0x%hhx\n", part.system_id);
+
+	printf("Possible Partition Type:\n");
+	for (const char **id = system_ids[part.system_id]; *id; id++)
+		puts(*id);
 
 	printf("Starting head: %d\n", part.start_head);
 	printf("Starting cylinder: %d\n", part.start_cylinder);
@@ -68,28 +50,22 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	struct mbr MBR;
+
 	FILE *fp = fopen(argv[1], "rb");
 	if (!fp) {
 		perror("Failed to open file");
 		return 1;
 	}
 
-	if (fread(&MBR, MBR_SIZE, 1, fp) != 1) {
+	if (fread(&MBR, sizeof(MBR), 1, fp) != 1) {
 		fprintf(stderr, "Could not read the MBR\n");
 		fclose(fp);
 		return 1;
 	}
 
-	//for (int i = 0; i < MBR_SIZE / 16; i++) {
-	//	int off = i*16;
-	//	uint8_t *ptr = (uint8_t*)&MBR;
-	//	hexprint(ptr + off, 16);
-	//	putchar('\n');
-	//}
-
 	uint8_t valid[2] = { 0x55, 0xAA };
-
-	printf("Signature: "BYTE" "BYTE" (%s bootsector)\n",
+	printf("Signature: 0x%02hhX 0x%02hhX (%s bootsector)\n",
 			MBR.signature[0], MBR.signature[1],
 			!memcmp(MBR.signature, valid, 2) ? "Valid" : "Invalid");
 
@@ -101,6 +77,9 @@ int main(int argc, char **argv)
 		dump_partition(MBR.table[i]);
 		puts("");
 	}
+
+	printf("Bootstrap code:\n");
+	dump_assembly((uint8_t *)MBR.bootstrap, 440);
 
 	fclose(fp);
 	return 0;
